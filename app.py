@@ -95,13 +95,30 @@ METRIC_COLUMNS = {
 #
 # ➡️ LIVE VERSION (later): change this to @st.cache_data(ttl=5)
 #    so Streamlit re-reads the file every 5 seconds and picks up new rows.
+def read_dates(column):
+    """Turn a column of date text into real dates, whatever style the file uses.
+
+    Handles both  2025-10-01 09:54:00  (year first) and  01-10-2025 09:54
+    (day first), even when both appear in the same file. Anything that cannot
+    be read becomes blank (NaT) instead of crashing the app.
+    """
+    text = column.astype(str).str.strip()
+    year_first = text.str.match(r"^\d{4}-\d{1,2}-\d{1,2}")
+    parts = []
+    if year_first.any():
+        parts.append(pd.to_datetime(text[year_first], format="mixed", errors="coerce"))
+    if (~year_first).any():
+        parts.append(pd.to_datetime(text[~year_first], format="mixed", dayfirst=True, errors="coerce"))
+    return pd.concat(parts).sort_index()
+
+
 @st.cache_data
 def load_data():
     data = pd.read_csv(DATA_FILE)
-    # dayfirst=True because dates in the file look like 01-10-2025 (day-month-year)
-    data["Timestamp"] = pd.to_datetime(data["Timestamp"], dayfirst=True)
-    data["Date"] = pd.to_datetime(data["Date"], dayfirst=True)
-    return data
+    data["Timestamp"] = read_dates(data["Timestamp"])
+    data["Date"] = read_dates(data["Date"])
+    # Drop any row whose date could not be read (keeps the dashboard from crashing)
+    return data.dropna(subset=["Date"]).reset_index(drop=True)
 
 
 # =============================================================================
