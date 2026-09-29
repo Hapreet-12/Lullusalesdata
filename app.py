@@ -16,6 +16,11 @@ Normally, touching ANY widget makes Streamlit re-run the whole script.
 A "fragment" is a piece of the page that can re-run on its own.
 So when you change a chart's local filter, only that chart is redrawn.
 
+Colours
+-------
+* Page colours (background, buttons, text) live in  .streamlit/config.toml
+* Chart colours live in the PALETTE section below - change them there.
+
 Run it on your own computer:
     pip install -r requirements.txt
     streamlit run app.py
@@ -45,17 +50,32 @@ EMIRATES = ["Dubai", "Abu Dhabi", "Sharjah", "Ajman", "Ras Al Khaimah", "Fujaira
 AGE_GROUPS = ["18-24", "25-34", "35-44", "45-54", "55+"]
 FESTIVE_SEASONS = ["White Friday", "DSF", "Ramadan", "Back to School"]
 
+# -----------------------------------------------------------------------------
+# PALETTE  (all chart colours come from here)
+# -----------------------------------------------------------------------------
+EMERALD = "#12A57A"      # main brand colour, "good" things (margin, progress bars)
+DEEP_GREEN = "#0B4F3C"   # darkest green: single lines, heatmap high end
+AMBER = "#F5B301"        # warm highlight (discounts, festive seasons)
+ROSE = "#E5548A"
+VIOLET = "#7C5CE0"
+BLUE = "#2F80ED"
+ORANGE = "#D9622B"
+MINT = "#EAF7F1"         # lightest green: heatmap low end
+
 # Each category always gets the SAME colour in every chart, so viewers
 # learn the colours once and can read every chart faster.
 CATEGORY_COLORS = {
-    "Fresh": "#2E9E5B",
-    "Grocery": "#E0A526",
-    "Fashion": "#C2408A",
-    "Home Decor": "#2A9D8F",
-    "Electronics": "#3A6FD8",
-    "Furniture": "#8C5A3C",
+    "Fresh": EMERALD,
+    "Grocery": AMBER,
+    "Fashion": ROSE,
+    "Home Decor": VIOLET,
+    "Electronics": BLUE,
+    "Furniture": ORANGE,
 }
-OTHER_COLORS = ["#3A6FD8", "#2A9D8F", "#E0A526", "#C2408A"]   # for charts not split by category
+OTHER_COLORS = [EMERALD, BLUE, AMBER, ROSE]                 # for charts not split by category
+GENDER_COLORS = {"Female": "#0E7C86", "Male": "#8FD3D9"}    # teal pair
+HEATMAP_SALES_SCALE = [MINT, EMERALD, DEEP_GREEN]           # low -> high
+HEATMAP_MARGIN_SCALE = [ROSE, "#FFF6DA", EMERALD]           # negative -> zero -> positive
 CHART_HEIGHT = 380                                          # same height for every chart
 
 # The measures a user can choose, and the column each one comes from.
@@ -77,12 +97,39 @@ METRIC_COLUMNS = {
 #    so Streamlit re-reads the file every 5 seconds and picks up new rows.
 @st.cache_data
 def load_data():
-    return pd.read_csv(DATA_FILE, parse_dates=["Timestamp", "Date"])
+    data = pd.read_csv(DATA_FILE)
+    # dayfirst=True because dates in the file look like 01-10-2025 (day-month-year)
+    data["Timestamp"] = pd.to_datetime(data["Timestamp"], dayfirst=True)
+    data["Date"] = pd.to_datetime(data["Date"], dayfirst=True)
+    return data
 
 
 # =============================================================================
 # 4. HELPER FUNCTIONS  (small reusable pieces used by the charts)
 # =============================================================================
+def inject_css():
+    """A little extra styling so cards and KPI boxes look like white tiles on the mint page."""
+    st.markdown(
+        f"""
+        <style>
+        /* Chart cards and KPI boxes: white tile, rounded corners, soft green border */
+        div[data-testid="stVerticalBlockBorderWrapper"],
+        div[data-testid="stMetric"] {{
+            background: #FFFFFF;
+            border: 1px solid #D5E6DE !important;
+            border-radius: 16px;
+        }}
+        /* KPI numbers in the deep brand green */
+        div[data-testid="stMetricValue"] {{ color: {DEEP_GREEN}; }}
+        /* Headings */
+        h1 {{ color: {DEEP_GREEN}; }}
+        h4 {{ color: #17392E; }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def aed(value):
     """Turn a number into a short money label, e.g. 1234567 -> 'AED 1.23M'."""
     if abs(value) >= 1_000_000:
@@ -173,12 +220,18 @@ def no_data_message():
 
 
 def style(fig):
-    """Give every Plotly chart the same size, margins and legend position."""
+    """Give every Plotly chart the same size, margins, fonts and colours."""
     fig.update_layout(
         height=CHART_HEIGHT,
         margin=dict(l=0, r=0, t=10, b=0),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, title_text=""),
+        template="plotly_white",                       # clean white base
+        paper_bgcolor="rgba(0,0,0,0)",                 # transparent, so the white card shows through
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#17392E"),
     )
+    fig.update_xaxes(gridcolor="#E3EEE8", zeroline=False)
+    fig.update_yaxes(gridcolor="#E3EEE8", zeroline=False)
     return fig
 
 
@@ -306,8 +359,8 @@ def emirate_heatmap_card():
         fig = px.imshow(
             grid, aspect="auto",
             text_auto=".1f" if is_margin else ".3s",
-            # Margin can be negative, so use red-yellow-green centred on 0
-            color_continuous_scale="RdYlGn" if is_margin else "Greens",
+            # Margin can be negative: rose = loss, cream = break-even, emerald = profit
+            color_continuous_scale=HEATMAP_MARGIN_SCALE if is_margin else HEATMAP_SALES_SCALE,
             color_continuous_midpoint=0 if is_margin else None,
             labels=dict(x="", y="", color=""),
         )
@@ -341,8 +394,9 @@ def trend_card():
         summary = summarise(data, ["Period", "Category"] if split else "Period", metric)
         fig = px.line(summary, x="Period", y=metric, markers=grain != "Daily",
                       color="Category" if split else None, category_orders={"Category": CATEGORIES},
-                      color_discrete_map=CATEGORY_COLORS, color_discrete_sequence=["#34495E"])
+                      color_discrete_map=CATEGORY_COLORS, color_discrete_sequence=[DEEP_GREEN])
         fig.update_layout(xaxis_title=None)
+        fig.update_traces(line=dict(width=2.5))
 
         if show_seasons:
             # Find each season's first and last day from the Promotion column
@@ -351,7 +405,7 @@ def trend_card():
             for season in FESTIVE_SEASONS:
                 days = everything.loc[everything["Promotion"] == season, "Date"]
                 if days.max() >= first_shown and days.min() <= last_shown:   # only if it's in view
-                    fig.add_vrect(x0=days.min(), x1=days.max(), fillcolor="#E0A526", opacity=0.12,
+                    fig.add_vrect(x0=days.min(), x1=days.max(), fillcolor=AMBER, opacity=0.16,
                                   line_width=0, annotation_text=season, annotation_position="top left",
                                   annotation_font_size=11)
 
@@ -378,7 +432,8 @@ def mix_card():
         summary = summarise(data, column, metric)
         fig = px.pie(summary, names=column, values=metric, hole=0.55,
                      color_discrete_sequence=OTHER_COLORS)
-        fig.update_traces(textinfo="percent", sort=True)
+        # White gaps between slices look crisper on the white card
+        fig.update_traces(textinfo="percent", sort=True, marker=dict(line=dict(color="#FFFFFF", width=2)))
         st.plotly_chart(style(fig), key="chart_mix")
 
 
@@ -414,7 +469,7 @@ def promotion_card():
         long = summary.melt(id_vars="Promotion", value_vars=["Avg. discount (%)", "Profit margin (%)"],
                             var_name="Measure", value_name="Percent")
         fig = px.bar(long, x="Promotion", y="Percent", color="Measure", barmode="group", text_auto=".1f",
-                     color_discrete_map={"Avg. discount (%)": "#E0A526", "Profit margin (%)": "#2E9E5B"})
+                     color_discrete_map={"Avg. discount (%)": AMBER, "Profit margin (%)": EMERALD})
         fig.update_layout(xaxis_title=None, yaxis_title="%")
         st.plotly_chart(style(fig), key="chart_promo")
 
@@ -442,7 +497,7 @@ def customer_card():
         fig = px.bar(summary, x="Age_Group", y=metric, color="Gender", barmode="group",
                      text_auto=".2f" if metric.startswith("Average") else ".3s",
                      category_orders={"Age_Group": AGE_GROUPS},
-                     color_discrete_map={"Female": "#4C5B7A", "Male": "#A3B4CC"},
+                     color_discrete_map=GENDER_COLORS,
                      labels={"Age_Group": "Age group"})
         st.plotly_chart(style(fig), key="chart_customers")
 
@@ -481,7 +536,7 @@ def top_products_card():
                 "Category": st.column_config.TextColumn(width="small"),
                 # A bar inside the cell makes the biggest sellers easy to spot
                 "Net sales (AED)": st.column_config.ProgressColumn(
-                    "Net sales", format="compact", color="#2E9E5B", width="small",
+                    "Net sales", format="compact", color=EMERALD, width="small",
                     min_value=0, max_value=float(table["Net sales (AED)"].max())),
                 "Profit (AED)": st.column_config.NumberColumn("Profit", format="compact", width="small"),
                 "Units sold": st.column_config.NumberColumn("Units", width="small"),
@@ -517,6 +572,8 @@ def data_explorer_card():
 # =============================================================================
 # 6. PAGE LAYOUT  (this is the part that actually draws the page, top to bottom)
 # =============================================================================
+inject_css()
+
 df = load_data()
 first_day, last_day = df["Date"].min().date(), df["Date"].max().date()
 
